@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock AI Predictor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-50 text-gray-900 font-sans">
+
+    <!-- Навигация -->
+    <nav class="bg-white border-b sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-6 py-4 flex justify-between items-center">
+            <div class="flex gap-6 font-medium">
+                <a href="/" class="text-blue-600 border-b-2 border-blue-600">Аналитика</a>
+                <a href="/backtest.html" class="text-gray-500 hover:text-blue-600 transition">Бэктест</a>
+            </div>
+        </div>
+    </nav>
+
+    <main class="max-w-7xl mx-auto px-6 py-8">
+        <!-- Блок поиска -->
+        <div class="bg-white p-8 rounded-3xl shadow-sm border mb-8 flex flex-col md:flex-row gap-4 items-end">
+            <div class="flex-[2] w-full">
+                <label class="block text-sm font-semibold text-gray-500 mb-2 uppercase tracking-wider">Введите тикер</label>
+                <input id="tickerInput" type="text" placeholder="Например: AAPL, BTC-USD" 
+                    class="w-full px-5 py-4 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none transition text-lg font-bold">
+            </div>
+            <div class="flex-1 w-full">
+                <label class="block text-sm font-semibold text-gray-500 mb-2 uppercase tracking-wider">Дней прогноза</label>
+                <input id="daysInput" type="number" value="7" min="1" max="30"
+                    class="w-full px-5 py-4 bg-gray-50 border border-gray-200 rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none transition text-lg font-bold">
+            </div>
+            <button onclick="fetchData()" class="w-full md:w-auto bg-blue-600 hover:bg-blue-700 text-white px-10 py-4 rounded-2xl font-bold transition-all shadow-lg shadow-blue-200">
+                Анализировать
+            </button>
+        </div>
+        <!-- Блок выбора периода -->
+        <div class="flex gap-2 mb-6 overflow-x-auto pb-2 no-scrollbar" id="periodSelector">
+            <button onclick="changePeriod('6mo')" class="period-btn px-4 py-2 bg-white border border-gray-200 rounded-xl text-xs font-bold hover:bg-gray-50 transition shadow-sm" data-period="6mo">6 МЕС</button>
+            <button onclick="changePeriod('1y')" class="period-btn active-period px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-100" data-period="1y">1 ГОД</button>
+            <button onclick="changePeriod('2y')" class="period-btn px-4 py-2 bg-white border border-gray-200 rounded-xl text-xs font-bold hover:bg-gray-50 transition shadow-sm" data-period="2y">2 ГОДА</button>
+        </div>
+
+        <style>
+            .active-period {
+                background-color: #2563eb !important;
+                color: white !important;
+                border-color: #2563eb !important;
+            }
+        </style>
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- Левая колонка: График -->
+            <div class="lg:col-span-2 bg-white p-8 rounded-3xl shadow-sm border">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 id="stockName" class="text-2xl font-bold text-gray-800 italic">Выберите акцию...</h2>
+                    <span id="stockCurrency" class="px-3 py-1 bg-gray-100 text-gray-500 rounded-lg text-sm font-bold">---</span>
+                </div>
+                <div class="relative h-[400px]">
+                    <canvas id="mainChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Правая колонка: AI Прогноз -->
+            <div class="space-y-6">
+                <!-- Секция выбора модели (она у вас уже есть) -->
+                <div class="bg-white p-6 rounded-3xl shadow-sm border mb-6">
+                    <h3 class="text-gray-400 font-bold uppercase text-xs tracking-widest mb-4">Выберите архитектуру ИИ</h3>
+                    <div class="flex flex-col gap-2" id="modelSelector">
+                        <button onclick="selectModel('model_gru')" id="btn_model_gru" 
+                                class="model-btn active-model flex justify-between items-center p-4 rounded-2xl border-2 transition-all">
+                            <span class="font-bold">GRU (Рекомендуемо)</span>
+                            <span class="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded-md">Fast</span>
+                        </button>
+                        
+                        <button onclick="selectModel('model_lstm')" id="btn_model_lstm" 
+                                class="model-btn flex justify-between items-center p-4 rounded-2xl border-2 border-transparent bg-gray-50 hover:bg-gray-100 transition-all">
+                            <span class="font-bold text-gray-600">LSTM</span>
+                            <span class="text-xs bg-gray-200 text-gray-500 px-2 py-1 rounded-md">Stable</span>
+                        </button>
+
+                        <button onclick="selectModel('model_cnn')" id="btn_model_cnn" 
+                                class="model-btn flex justify-between items-center p-4 rounded-2xl border-2 border-transparent bg-gray-50 hover:bg-gray-100 transition-all">
+                            <span class="font-bold text-gray-600">CNN</span>
+                            <span class="text-xs bg-gray-200 text-gray-500 px-2 py-1 rounded-md">Legacy</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- ДОБАВЬТЕ ЭТОТ БЛОК НИЖЕ (Карточка результата) -->
+                <div class="bg-white p-8 rounded-3xl shadow-sm border border-t-8 border-t-blue-500">
+                    <h3 class="text-gray-400 font-bold uppercase text-xs tracking-widest mb-4">AI Recommendation</h3>
+                    
+                    <!-- Этот блок будет скрыт во время загрузки -->
+                    <div id="predictionContent" class="hidden">
+                        <div id="signalBadge" class="text-3xl font-black mb-2 italic text-gray-800">---</div>
+                        <p class="text-sm text-gray-500 font-medium">Анализ завершен на основе выбранной архитектуры нейросети.</p>
+                        <hr class="my-6 border-gray-100">
+                        <div class="flex justify-between text-xs font-bold text-gray-400 uppercase tracking-tighter">
+                            <span>Статус: Актуально</span>
+                            <span>Data: 60 days</span>
+                        </div>
+                    </div>
+
+                    <!-- Этот блок (Лоадер) будет виден, пока идет запрос -->
+                    <div id="predictionLoader" class="text-gray-300 py-10 text-center italic">
+                        <div class="inline-block animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full mb-4"></div>
+                        <p class="text-sm font-medium">Ожидание данных...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+let mainChartInstance = null; // Глобальная переменная для графика
+let currentModel = 'gru';
+let currentPeriod = '1y'; // По умолчанию за 1 год
+
+function changePeriod(p) {
+    currentPeriod = p;
+    
+    // Обновляем визуальный стиль кнопок
+    document.querySelectorAll('.period-btn').forEach(btn => {
+        if (btn.getAttribute('data-period') === p) {
+            btn.className = 'period-btn active-period px-4 py-2 rounded-xl text-xs font-bold shadow-md shadow-blue-100';
+        } else {
+            btn.className = 'period-btn px-4 py-2 bg-white border border-gray-200 rounded-xl text-xs font-bold hover:bg-gray-50 transition shadow-sm';
+        }
+    });
+
+    // Если тикер введен, перезагружаем данные
+    if (document.getElementById('tickerInput').value) {
+        fetchData();
+    }
+}
+
+
+
+// 1. Выбор модели
+function selectModel(modelType) {
+    currentModel = modelType.replace('model_', '');
+    document.querySelectorAll('.model-btn').forEach(btn => {
+        btn.className = 'model-btn flex justify-between items-center p-4 rounded-2xl border-2 border-transparent bg-gray-50 hover:bg-gray-100 transition-all';
+    });
+    const activeBtn = document.getElementById('btn_' + modelType) || document.getElementById('btn_' + currentModel);
+    if (activeBtn) {
+        activeBtn.className = 'model-btn active-model flex justify-between items-center p-4 rounded-2xl border-2 border-blue-500 bg-white';
+    }
+    if (document.getElementById('tickerInput').value) fetchData();
+}
+
+// 2. Главная функция (Подготовка данных)
+async function fetchData() {
+    const ticker = document.getElementById('tickerInput').value.trim().toUpperCase();
+    const days = parseInt(document.getElementById('daysInput').value) || 7;
+    
+    if (!ticker) return;
+    showLoader(true);
+
+    try {
+        const encodedTicker = encodeURIComponent(ticker);
+        const baseUrl = window.location.origin;
+
+        // ШАГ 1: История
+        const hRes = await fetch(baseUrl + '/api/stock/data/' + encodedTicker + '?period=' + currentPeriod);
+        if (!hRes.ok) throw new Error('История не найдена');
+        const hData = await hRes.json();
+
+        // ШАГ 2: Прогноз
+        const predictUrl = baseUrl + '/api/predict-future/' + encodedTicker + '?model_type=' + currentModel + '&days=' + days;
+        const pRes = await fetch(predictUrl);
+        if (!pRes.ok) throw new Error('Прогноз не найден');
+        const pData = await pRes.json();
+
+        // --- ВАЖНО: ГОТОВИМ МАССИВЫ ТУТ ---
+        const labelsArr = Object.keys(hData.time_series).sort(); 
+        const pricesArr = labelsArr.map(d => parseFloat(hData.time_series[d]["4. close"]));
+
+        document.getElementById('stockName').innerText = hData.symbol || ticker;
+
+        // ПЕРЕДАЕМ ГОТОВЫЕ МАССИВЫ В ФУНКЦИЮ ОТРИСОВКИ
+        renderMainChart(labelsArr, pricesArr, pData.dates, pData.prices, pData.history_prices || []);
+        
+        updateRecommendation(pData.signal);
+
+    } catch (err) {
+        console.error("Ошибка:", err);
+        alert("Ошибка: " + err.message);
+    } finally {
+        showLoader(false);
+    }
+}
+
+// 3. Функция отрисовки (Только рисует то, что ей дали)
+function renderMainChart(hLabels, hPrices, fLabels, fPrices, hForecast) {
+    const ctx = document.getElementById('mainChart').getContext('2d');
+    
+    if (mainChartInstance) {
+        mainChartInstance.destroy();
+    }
+
+    // Стык линий
+    const offset = hPrices.length - hForecast.length;
+    const aiPathData = new Array(offset).fill(null)
+        .concat(hForecast)
+        .concat(fPrices);
+
+    mainChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [...hLabels, ...fLabels],
+            datasets: [
+                {
+                    label: 'Реальность',
+                    data: hPrices,
+                    borderColor: '#2563eb',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    fill: false
+                },
+                {
+                    label: 'Прогноз ИИ',
+                    data: aiPathData,
+                    borderColor: '#8b5cf6',
+                    borderWidth: 3,
+                    pointRadius: 0,
+                    fill: true,
+                    backgroundColor: 'rgba(139, 92, 246, 0.05)',
+                    tension: 0.3
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: { position: 'right', ticks: { callback: v => '$' + v.toFixed(2) } },
+                x: { ticks: { maxTicksLimit: 10, maxRotation: 0 } }
+            },
+            plugins: {
+                legend: { position: 'top' }
+            }
+        }
+    });
+}
+
+function updateRecommendation(sig) {
+    const badge = document.getElementById('signalBadge');
+    const content = document.getElementById('predictionContent');
+    if (content) content.className = 'bg-white p-8 rounded-3xl shadow-sm border border-t-8 border-t-blue-500';
+    if (badge && sig) {
+        const isBuy = sig.toUpperCase() === 'BUY';
+        badge.innerText = isBuy ? 'ПОКУПАТЬ' : 'ПРОДАВАТЬ';
+        badge.className = 'text-4xl font-black mb-2 italic tracking-tighter ' + (isBuy ? 'text-green-500' : 'text-red-500');
+    }
+}
+
+function showLoader(show) {
+    const loader = document.getElementById('predictionLoader');
+    const content = document.getElementById('predictionContent');
+    if (loader) loader.className = show ? 'py-10 text-center' : 'py-10 text-center hidden';
+    if (content && show) content.className = 'hidden';
+}
+    </script>
+</body>
+</html>
+

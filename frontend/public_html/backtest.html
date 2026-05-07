@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Бэктестинг | STOCK.AI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-50 font-sans text-slate-900">
+    <nav class="bg-white border-b p-4 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto flex justify-between items-center">
+            <a href="/" class="font-bold text-blue-600 flex items-center gap-2"><span>←</span> Вернуться к анализу</a>
+        </div>
+    </nav>
+
+    <main class="max-w-6xl mx-auto py-12 px-6">
+        <h1 class="text-4xl font-black mb-8 italic">Бэктест стратегий</h1>
+        
+        <!-- УПРАВЛЕНИЕ -->
+        <div class="bg-white p-8 rounded-3xl shadow-sm border mb-10 flex flex-col md:flex-row gap-6 items-end">
+            <div class="flex-1 w-full">
+                <label class="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-widest">Тикер для теста</label>
+                <input id="testTicker" type="text" value="AAPL" class="w-full p-4 bg-gray-50 border border-gray-200 rounded-2xl outline-none focus:ring-2 focus:ring-blue-500 font-bold text-lg">
+            </div>
+            <div class="w-full md:w-48">
+                <label class="block text-xs font-bold text-gray-400 uppercase mb-2 tracking-widest">Дней в прошлом</label>
+                <input id="testDays" type="number" value="100" class="w-full p-4 bg-gray-50 border border-gray-200 rounded-2xl outline-none focus:ring-2 focus:ring-blue-500 font-bold text-lg">
+            </div>
+            <button onclick="startBacktest()" class="w-full md:w-auto bg-blue-600 text-white px-10 py-5 rounded-2xl font-black hover:bg-blue-700 transition shadow-lg shadow-blue-100 uppercase">Запустить симуляцию</button>
+        </div>
+
+        <!-- КАРТОЧКИ РЕЗУЛЬТАТОВ -->
+        <div id="resultsContainer" class="grid grid-cols-1 md:grid-cols-3 gap-8 mb-12">
+            <div class="col-span-full text-center py-20 bg-white rounded-3xl border border-dashed text-gray-400">
+                <p>Настройте параметры и запустите симуляцию</p>
+            </div>
+        </div>
+
+        <!-- СЕКЦИЯ ГРАФИКОВ (ИСПРАВЛЕНА) -->
+        <div id="chartsContainer" class="hidden space-y-10">
+            <h2 class="text-3xl font-black mb-8 italic text-center">Визуализация стратегий</h2>
+            
+            <!-- Сетка для 3-х графиков -->
+            <div class="grid grid-cols-1 gap-10 max-w-5xl mx-auto">
+                <div class="bg-white p-6 rounded-3xl border shadow-sm">
+                    <h3 class="text-lg font-black text-green-600 mb-4 uppercase">Модель GRU</h3>
+                    <div style="height: 300px;"><canvas id="chart-gru"></canvas></div>
+                </div>
+
+                <div class="bg-white p-6 rounded-3xl border shadow-sm">
+                    <h3 class="text-lg font-black text-orange-500 mb-4 uppercase">Модель LSTM</h3>
+                    <div style="height: 300px;"><canvas id="chart-lstm"></canvas></div>
+                </div>
+
+                <div class="bg-white p-6 rounded-3xl border shadow-sm">
+                    <h3 class="text-lg font-black text-purple-600 mb-4 uppercase">Модель CNN</h3>
+                    <div style="height: 300px;"><canvas id="chart-cnn"></canvas></div>
+                </div>
+            </div>
+
+            <!-- СЧЕТЧИКИ СИГНАЛОВ -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-10 max-w-5xl mx-auto">
+                <div class="bg-green-50 p-4 rounded-2xl border border-green-100 text-center">
+                    <div class="text-xs text-green-400 font-bold uppercase mb-1">Сделок GRU</div>
+                    <div id="gruSignalsCount" class="text-2xl font-black text-green-700">0</div>
+                </div>
+                <div class="bg-orange-50 p-4 rounded-2xl border border-orange-100 text-center">
+                    <div class="text-xs text-orange-400 font-bold uppercase mb-1">Сделок LSTM</div>
+                    <div id="lstmSignalsCount" class="text-2xl font-black text-orange-700">0</div>
+                </div>
+                <div class="bg-purple-50 p-4 rounded-2xl border border-purple-100 text-center">
+                    <div class="text-xs text-purple-400 font-bold uppercase mb-1">Сделок CNN</div>
+                    <div id="cnnSignalsCount" class="text-2xl font-black text-purple-700">0</div>
+                </div>
+            </div>
+
+           <div class="max-w-5xl mx-auto mt-12 bg-white rounded-3xl border shadow-sm overflow-hidden">
+                <div class="bg-gray-50 p-4 border-b">
+                    <h3 class="font-black uppercase text-xs tracking-widest text-gray-500">🏆 Сравнение эффективности моделей</h3>
+                </div>
+                <table class="w-full text-left border-collapse">
+                    <thead class="text-[10px] uppercase text-gray-400 font-bold bg-gray-50/50">
+                        <tr>
+                            <th class="p-4">Модель</th>
+                            <th class="p-4">Win Rate %</th>
+                            <th class="p-4">Max Drawdown %</th>
+                            <th class="p-4">Avg PnL %</th>
+                            <th class="p-4">Sharpe Ratio</th>
+                        </tr>
+                    </thead>
+                    <!-- ВОТ ЭТОТ ID ДОЛЖЕН БЫТЬ ТАКИМ -->
+                    <tbody id="metricsTableBody" class="text-sm font-bold text-slate-700"></tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+<script>
+    let chartInstances = {};
+    function renderMetricsComparison(results) {
+    const tableBody = document.getElementById('metricsTableBody');
+    if (!tableBody) {
+        console.error("❌ Элемент #metricsTableBody не найден в HTML!");
+        return;
+    }
+
+    console.log("📥 Получены данные для таблицы:", results); // ОТЛАДКА
+    tableBody.innerHTML = ''; 
+
+    if (!results || Object.keys(results).length === 0) {
+        console.warn("⚠️ Объект results пуст");
+        return;
+    }
+
+    for (const [modelName, data] of Object.entries(results)) {
+        console.log(`📊 Обработка модели ${modelName}:`, data); // ОТЛАДКА
+
+        const row = document.createElement('tr');
+        row.className = "border-b last:border-0 hover:bg-gray-50 transition-colors";
+        
+        // Берем значения из бэкенда. Если их нет - ставим 0.
+        const winRate = data.win_rate !== undefined ? data.win_rate : 0;
+        const maxDD = data.max_dd !== undefined ? data.max_dd : 0;
+        const avgPnL = data.avg_pnl !== undefined ? data.avg_pnl : 0;
+        const sharpe = data.sharpe !== undefined ? data.sharpe : 0;
+
+        row.innerHTML = `
+            <td class="p-4 text-blue-600 font-black">${modelName.toUpperCase()}</td>
+            <td class="p-4">${winRate}%</td>
+            <td class="p-4 text-red-500">${maxDD}%</td>
+            <td class="p-4 ${avgPnL >= 0 ? 'text-green-500' : 'text-red-500'}">${avgPnL}%</td>
+            <td class="p-4 text-purple-600">${sharpe}</td>
+        `;
+        tableBody.appendChild(row);
+    }
+}
+    async function startBacktest() {
+        const ticker = document.getElementById('testTicker').value.trim().toUpperCase();
+        const days = document.getElementById('testDays').value;
+        const container = document.getElementById('resultsContainer');
+
+        if (!ticker) return alert("Введите тикер");
+        container.innerHTML = `<div class="col-span-full text-center py-20 font-bold italic text-blue-500">Симуляция запущена...</div>`;
+
+        try {
+            const response = await fetch(`/api/backtest/run/${ticker}?days=${days}`);
+            if (!response.ok) {
+                const errorData = await response.json();
+                console.error("Ошибка сервера:", errorData.detail);
+                showError("Сервер вернул ошибку: " + errorData.detail);
+                return; // Останавливаем выполнение, чтобы не было TypeError
+            }
+            
+            const data = await response.json();
+
+            renderResults(data.results);
+
+            if (data.results) {
+                renderMetricsComparison(data.results); 
+            }
+            if (data.chart_data) {
+                renderCharts(data.chart_data);
+            }
+        } catch (e) {
+            console.error(e);
+            container.innerHTML = `<div class="col-span-full text-center text-red-500">Ошибка при загрузке данных</div>`;
+        }
+    }
+
+    function renderResults(results) {
+        // 1. Проверяем именно тот аргумент, который пришел в функцию (results)
+        if (!results || Object.keys(results).length === 0) {
+            console.error("Нет данных для отображения");
+            return;
+        }
+
+        const container = document.getElementById('resultsContainer');
+        container.innerHTML = '';
+        
+        for (const [name, res] of Object.entries(results)) {
+            const isProfit = res.profit_pct >= 0;
+            const card = document.createElement('div');
+            card.className = "bg-white p-8 rounded-3xl border shadow-sm flex flex-col";
+            
+            // 2. Безопасно рендерим сделки (проверяем, есть ли массив trades)
+            const tradesHtml = (res.trades || []).map(t => `
+                <div class="flex justify-between text-[10px] p-2 bg-gray-50 rounded-lg">
+                    <span class="font-bold">${t.date || '---'}</span>
+                    <span class="${(t.type === 'BUY' || t.type === 'ENTRY') ? 'text-green-600' : 'text-red-600'} font-black">${t.type}</span>
+                    <span class="font-bold">$${t.price}</span>
+                </div>
+            `).join('');
+
+            card.innerHTML = `
+                <div class="mb-4">
+                    <h3 class="text-xs font-black text-gray-400 uppercase tracking-widest">${name}</h3>
+                    <div class="text-3xl font-black ${isProfit ? 'text-green-500' : 'text-red-500'}">$${res.final_balance.toLocaleString()}</div>
+                    <div class="text-sm font-bold opacity-60">${isProfit ? '▲' : '▼'} ${res.profit_pct}%</div>
+                </div>
+                <div class="flex-1 overflow-y-auto max-h-48 space-y-2 custom-scrollbar">
+                    ${tradesHtml || '<div class="text-center text-gray-400 text-xs">Нет сделок</div>'}
+                </div>`;
+            container.appendChild(card);
+        }
+    }
+
+    function renderCharts(chartData) {
+        // Убираем hidden у контейнера
+        document.getElementById('chartsContainer').classList.remove('hidden');
+        
+        const models = ['gru', 'lstm', 'cnn'];
+        const colors = { gru: '#10b981', lstm: '#f59e0b', cnn: '#8b5cf6' };
+
+        models.forEach(m => {
+            const canvas = document.getElementById(`chart-${m}`);
+            if (!canvas) return;
+
+            const ctx = canvas.getContext('2d');
+            if (chartInstances[m]) chartInstances[m].destroy();
+
+            const modelData = chartData.models[m];
+
+            // Считаем количество сделок для счетчиков
+            const tradesCount = modelData.buy.filter(x => x !== null).length + modelData.sell.filter(x => x !== null).length;
+            document.getElementById(`${m}SignalsCount`).textContent = tradesCount;
+
+            chartInstances[m] = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: chartData.dates,
+                    datasets: [
+                        {
+                            label: 'Реальная цена',
+                            data: chartData.real_prices,
+                            borderColor: '#94a3b8', // Сделаем чуть темнее
+                            borderWidth: 4,         // БЫЛО 2, СТАЛО 4 (Толстая основная линия)
+                            pointRadius: 0,
+                            tension: 0.2,           // Добавляет небольшое сглаживание
+                            fill: false,
+                            order: 2
+                        },
+                        {
+                            label: 'Прогноз',
+                            data: modelData.predicted,
+                            borderColor: colors[m],
+                            borderWidth: 2,         // БЫЛО 1, СТАЛО 2 (Толще пунктир)
+                            borderDash: [8, 5],     // Увеличили длину штриха пунктира
+                            pointRadius: 0,
+                            tension: 0.4,           // Более плавный прогноз
+                            fill: false,
+                            order: 3
+                        },
+                        {
+                            label: 'BUY',
+                            data: modelData.buy,
+                            backgroundColor: '#10b981',
+                            borderColor: 'white',
+                            borderWidth: 3,         // Толстая белая обводка у точек
+                            pointRadius: 9,         // БЫЛО 6, СТАЛО 9 (Крупные точки)
+                            pointHoverRadius: 12,   // Размер при наведении
+                            showLine: false,
+                            order: 1
+                        },
+                        {
+                            label: 'SELL',
+                            data: modelData.sell,
+                            backgroundColor: '#ef4444',
+                            borderColor: 'white',
+                            borderWidth: 3,         // Толстая белая обводка
+                            pointRadius: 9,         // БЫЛО 6, СТАЛО 9
+                            pointHoverRadius: 12,
+                            pointStyle: 'rectRot',  // Ромбик
+                            showLine: false,
+                            order: 1
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { position: 'bottom', labels: { boxWidth: 8, font: { size: 10 } } } },
+                    scales: { 
+                        y: { position: 'right', grid: { color: '#f1f5f9' } },
+                        x: { ticks: { autoSkip: true, maxTicksLimit: 8 } }
+                    }
+                }
+            });
+        });
+    }
+    function showError(message) {
+        const errorDiv = document.getElementById('errorMessage'); // Убедись, что такой ID есть в HTML
+        if (errorDiv) {
+            errorDiv.innerText = message;
+            errorDiv.style.display = 'block';
+        } else {
+            alert(message); // Если дива нет, просто выведет в окно
+        }
+    }
+</script>
+
+<style>
+    .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
+</style>
+</body>
+</html>
