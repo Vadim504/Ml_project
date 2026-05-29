@@ -68,21 +68,24 @@
                 <div class="bg-white p-6 rounded-3xl shadow-sm border mb-6">
                     <h3 class="text-gray-400 font-bold uppercase text-xs tracking-widest mb-4">Выберите архитектуру ИИ</h3>
                     <div class="flex flex-col gap-2" id="modelSelector">
-                        <button onclick="selectModel('model_gru')" id="btn_model_gru" 
-                                class="model-btn active-model flex justify-between items-center p-4 rounded-2xl border-2 transition-all">
-                            <span class="font-bold">GRU (Рекомендуемо)</span>
+                        <!-- GRU -->
+                        <button onclick="selectModel('gru')" id="btn_gru" 
+                                class="model-btn flex justify-between items-center p-4 rounded-2xl border-2 border-transparent bg-gray-50 hover:bg-gray-100 transition-all">
+                            <span class="font-bold"><span id="name_gru">GRU</span> <span id="rec_gru" class="text-blue-500 ml-1"></span></span>
                             <span class="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded-md">Fast</span>
                         </button>
                         
-                        <button onclick="selectModel('model_lstm')" id="btn_model_lstm" 
+                        <!-- LSTM -->
+                        <button onclick="selectModel('lstm')" id="btn_lstm" 
                                 class="model-btn flex justify-between items-center p-4 rounded-2xl border-2 border-transparent bg-gray-50 hover:bg-gray-100 transition-all">
-                            <span class="font-bold text-gray-600">LSTM</span>
+                            <span class="font-bold"><span id="name_lstm">LSTM</span> <span id="rec_lstm" class="text-blue-500 ml-1"></span></span>
                             <span class="text-xs bg-gray-200 text-gray-500 px-2 py-1 rounded-md">Stable</span>
                         </button>
 
-                        <button onclick="selectModel('model_cnn')" id="btn_model_cnn" 
+                        <!-- CNN -->
+                        <button onclick="selectModel('cnn')" id="btn_cnn" 
                                 class="model-btn flex justify-between items-center p-4 rounded-2xl border-2 border-transparent bg-gray-50 hover:bg-gray-100 transition-all">
-                            <span class="font-bold text-gray-600">CNN</span>
+                            <span class="font-bold"><span id="name_cnn">CNN</span> <span id="rec_cnn" class="text-blue-500 ml-1"></span></span>
                             <span class="text-xs bg-gray-200 text-gray-500 px-2 py-1 rounded-md">Legacy</span>
                         </button>
                     </div>
@@ -114,85 +117,144 @@
     </main>
 
     <script>
-let mainChartInstance = null; // Глобальная переменная для графика
+let mainChartInstance = null;
 let currentModel = 'gru';
-let currentPeriod = '1y'; // По умолчанию за 1 год
+let currentPeriod = '1y';
+let lastTicker = ""; 
 
-function changePeriod(p) {
-    currentPeriod = p;
-    
-    // Обновляем визуальный стиль кнопок
-    document.querySelectorAll('.period-btn').forEach(btn => {
-        if (btn.getAttribute('data-period') === p) {
-            btn.className = 'period-btn active-period px-4 py-2 rounded-xl text-xs font-bold shadow-md shadow-blue-100';
-        } else {
-            btn.className = 'period-btn px-4 py-2 bg-white border border-gray-200 rounded-xl text-xs font-bold hover:bg-gray-50 transition shadow-sm';
-        }
-    });
-
-    // Если тикер введен, перезагружаем данные
-    if (document.getElementById('tickerInput').value) {
-        fetchData();
-    }
-}
-
-
-
-// 1. Выбор модели
 function selectModel(modelType) {
     currentModel = modelType.replace('model_', '');
+    
+    // 2. Сбрасываем ВСЕ кнопки (и классы, и принудительные стили JS)
     document.querySelectorAll('.model-btn').forEach(btn => {
-        btn.className = 'model-btn flex justify-between items-center p-4 rounded-2xl border-2 border-transparent bg-gray-50 hover:bg-gray-100 transition-all';
+        // Убираем классы активности
+        btn.classList.remove('active-model', 'border-blue-500', 'bg-blue-50', 'ring-2', 'ring-blue-400');
+        btn.classList.add('border-transparent', 'bg-gray-50');
+        
+        // ВАЖНО: Очищаем инлайновые стили, которые добавила функция рекомендации
+        btn.style.borderColor = '';
+        btn.style.backgroundColor = '';
     });
-    const activeBtn = document.getElementById('btn_' + modelType) || document.getElementById('btn_' + currentModel);
+    
+    // 3. Устанавливаем стиль для ВЫБРАННОЙ кнопки
+    const activeBtn = document.getElementById('btn_' + currentModel);
     if (activeBtn) {
-        activeBtn.className = 'model-btn active-model flex justify-between items-center p-4 rounded-2xl border-2 border-blue-500 bg-white';
+        activeBtn.classList.add('active-model', 'border-blue-500', 'bg-white');
+        activeBtn.classList.remove('border-transparent', 'bg-gray-50');
+        // Принудительно красим рамку выбранной модели
+        activeBtn.style.borderColor = '#3b82f6'; 
     }
-    if (document.getElementById('tickerInput').value) fetchData();
+
+    // 4. Загружаем данные для новой модели (без повторного бэктеста)
+    if (document.getElementById('tickerInput').value) {
+        fetchData(true); 
+    }
 }
 
-// 2. Главная функция (Подготовка данных)
-async function fetchData() {
-    const ticker = document.getElementById('tickerInput').value.trim().toUpperCase();
+// 2. Главная функция
+async function fetchData(skipBacktest = false) {
+    const tickerInput = document.getElementById('tickerInput');
+    const ticker = tickerInput ? tickerInput.value.trim().toUpperCase() : "";
     const days = parseInt(document.getElementById('daysInput').value) || 7;
     
-    if (!ticker) return;
+    if (!ticker) return alert("Введите тикер");
+
     showLoader(true);
 
     try {
-        const encodedTicker = encodeURIComponent(ticker);
         const baseUrl = window.location.origin;
+        const encodedTicker = encodeURIComponent(ticker);
 
-        // ШАГ 1: История
-        const hRes = await fetch(baseUrl + '/api/stock/data/' + encodedTicker + '?period=' + currentPeriod);
+        // --- ШАГ 1: БЭКТЕСТ (Только если тикер новый или мы нажали "Анализировать") ---
+        // Если мы просто переключаем модель, этот блок пропустится
+        if (!skipBacktest || ticker !== lastTicker) {
+            resetModelUI(); // Убираем старые плашки "Рекомендуемо"
+            
+            try {
+                // Путь с учетом префикса в твоем FastAPI
+                const bRes = await fetch(`${baseUrl}/api/backtest/run/${encodedTicker}?days=100`);
+                if (bRes.ok) {
+                    const bData = await bRes.json();
+                    let winnerModel = 'gru';
+                    let maxProfit = -Infinity;
+
+                    if (bData.results) {
+                        Object.entries(bData.results).forEach(([mName, stats]) => {
+                            const profit = stats.profit_pct || stats.total_return || 0;
+                            if (profit > maxProfit) {
+                                maxProfit = profit;
+                                winnerModel = mName;
+                            }
+                        });
+                        updateModelBadges(winnerModel);
+                        lastTicker = ticker; // Запоминаем тикер
+                    }
+                }
+            } catch (bErr) {
+                console.warn("Фоновый анализ не удался:", bErr);
+            }
+        }
+
+        // --- ШАГ 2: ИСТОРИЯ И ПРОГНОЗ (Делаем всегда) ---
+        const [hRes, pRes] = await Promise.all([
+            fetch(`${baseUrl}/api/stock/data/${encodedTicker}?period=${currentPeriod}`),
+            fetch(`${baseUrl}/api/predict-future/${encodedTicker}?model_type=${currentModel}&days=${days}`)
+        ]);
+
         if (!hRes.ok) throw new Error('История не найдена');
-        const hData = await hRes.json();
-
-        // ШАГ 2: Прогноз
-        const predictUrl = baseUrl + '/api/predict-future/' + encodedTicker + '?model_type=' + currentModel + '&days=' + days;
-        const pRes = await fetch(predictUrl);
         if (!pRes.ok) throw new Error('Прогноз не найден');
+
+        const hData = await hRes.json();
         const pData = await pRes.json();
 
-        // --- ВАЖНО: ГОТОВИМ МАССИВЫ ТУТ ---
+        // Подготовка данных для графика
         const labelsArr = Object.keys(hData.time_series).sort(); 
         const pricesArr = labelsArr.map(d => parseFloat(hData.time_series[d]["4. close"]));
+        const currentPrice = pricesArr[pricesArr.length - 1];
 
+        // Обновляем UI
         document.getElementById('stockName').innerText = hData.symbol || ticker;
-
-        // ПЕРЕДАЕМ ГОТОВЫЕ МАССИВЫ В ФУНКЦИЮ ОТРИСОВКИ
         renderMainChart(labelsArr, pricesArr, pData.dates, pData.prices, pData.history_prices || []);
-        
-        updateRecommendation(pData.signal);
+        updateRecommendation(pData.signal, currentPrice, pData.prices);
 
     } catch (err) {
-        console.error("Ошибка:", err);
+        console.error("Критическая ошибка:", err);
         alert("Ошибка: " + err.message);
     } finally {
         showLoader(false);
     }
 }
 
+// 3. Сброс интерфейса
+function resetModelUI() {
+    ['gru', 'lstm', 'cnn'].forEach(m => {
+        const badge = document.getElementById(`rec_${m}`);
+        if (badge) badge.innerText = '';
+        const btn = document.getElementById(`btn_${m}`);
+        if (btn) {
+            btn.style.borderColor = 'transparent';
+            btn.style.backgroundColor = '#f9fafb';
+        }
+    });
+}
+
+// 4. Обновление плашек
+function updateModelBadges(bestModel) {
+    const models = ['gru', 'lstm', 'cnn'];
+    models.forEach(m => {
+        const badge = document.getElementById(`rec_${m}`);
+        const btn = document.getElementById(`btn_${m}`);
+        if (m === bestModel) {
+            if (badge) badge.innerText = '(Рекомендуемо)';
+            if (btn) {
+                btn.style.borderColor = '#3b82f6';
+                btn.style.backgroundColor = '#eff6ff';
+            }
+        }
+    });
+}
+
+// Остальные функции (renderMainChart, updateRecommendation, showLoader) оставь как были
 // 3. Функция отрисовки (Только рисует то, что ей дали)
 function renderMainChart(hLabels, hPrices, fLabels, fPrices, hForecast) {
     const ctx = document.getElementById('mainChart').getContext('2d');
@@ -246,14 +308,42 @@ function renderMainChart(hLabels, hPrices, fLabels, fPrices, hForecast) {
     });
 }
 
-function updateRecommendation(sig) {
+function updateRecommendation(sig, currentPrice, futurePrices) {
     const badge = document.getElementById('signalBadge');
     const content = document.getElementById('predictionContent');
+    
+    // Пытаемся найти или создать элемент для доходности
+    let profitEl = document.getElementById('potentialProfit');
+    if (!profitEl) {
+        profitEl = document.createElement('div');
+        profitEl.id = 'potentialProfit';
+        profitEl.className = 'text-lg font-bold mt-2';
+        // Вставляем его после заголовка (badge)
+        if (badge) badge.parentNode.insertBefore(profitEl, badge.nextSibling);
+    }
+
     if (content) content.className = 'bg-white p-8 rounded-3xl shadow-sm border border-t-8 border-t-blue-500';
-    if (badge && sig) {
+    
+    if (badge && sig && futurePrices && futurePrices.length > 0) {
         const isBuy = sig.toUpperCase() === 'BUY';
+        
+        // РАСЧЕТ ДОХОДНОСТИ
+        const lastPredictedPrice = futurePrices[futurePrices.length - 1];
+        let profitPct = ((lastPredictedPrice / currentPrice) - 1) * 100;
+        
+        // Если сигнал SELL, инвертируем профит для логики шорта
+        if (!isBuy) profitPct = -profitPct;
+
+        // Вычитаем комиссию 0.15%
+        const netProfit = profitPct - 0.15;
+
+        // Текст сигнала
         badge.innerText = isBuy ? 'ПОКУПАТЬ' : 'ПРОДАВАТЬ';
-        badge.className = 'text-4xl font-black mb-2 italic tracking-tighter ' + (isBuy ? 'text-green-500' : 'text-red-500');
+        badge.className = 'text-4xl font-black mb-1 italic tracking-tighter ' + (isBuy ? 'text-green-500' : 'text-red-500');
+        
+        // Текст доходности
+        profitEl.innerText = `Ожидаемый профит: ${netProfit > 0 ? '+' : ''}${netProfit.toFixed(2)}%`;
+        profitEl.className = netProfit > 0 ? 'text-green-600 opacity-80' : 'text-red-600 opacity-80';
     }
 }
 

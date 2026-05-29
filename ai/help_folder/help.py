@@ -2,7 +2,7 @@ from sklearn.preprocessing import StandardScaler
 import yfinance as yf
 import numpy as np
 from sklearn.utils.class_weight import compute_class_weight
-from sklearn.metrics import f1_score, precision_score
+from sklearn.metrics import f1_score, precision_score, balanced_accuracy_score
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from sklearn.metrics import classification_report
 import pandas as pd 
@@ -479,54 +479,59 @@ def prepare_data(
         "cw1": cw1,
         "cw2": cw2
     }
-def optimize_threshold(model, X, y, metric='precision', low=0.45, high=0.75, step=0.01, min_signal_ratio=0.02):
-    print(f"\n🔍 Оптимизация порога (metric='{metric}', min_signals={min_signal_ratio*100:.0f}%)...")
-    probs = model.predict(X, verbose=0).flatten()
-    n_samples = len(y)
+
+def optimize_threshold(model, X, y, metric='balanced_accuracy', min_signal_ratio=0.05):
+    """
+    Находит оптимальный порог вероятности на валидационных данных.
     
-    thresholds = np.arange(low, high + step, step)
+    min_signal_ratio: минимальный процент данных, которые должны быть помечены как MOVE.
+    Это защита от "переобучения на одном сигнале".
+    """
+    # 1. Получаем вероятности
+    probs = model.predict(X, verbose=0).flatten()
+    
+    # 2. Перебираем пороги от 0.3 до 0.8 с мелким шагом
+    thresholds = np.linspace(0.3, 0.8, 51)
     best_threshold = 0.5
-    best_score = -np.inf
+    best_score = -1
     
     for thresh in thresholds:
         preds = (probs >= thresh).astype(int)
-        signal_ratio = preds.sum() / n_samples
         
-        if signal_ratio < min_signal_ratio:
+        # Проверка: не слишком ли мало сигналов?
+        # Если сигналов меньше 5% от выборки, такой порог нам не подходит (слишком рискованно)
+        if np.mean(preds) < min_signal_ratio:
             continue
             
-        if metric == 'precision':
-            score = precision_score(y, preds, zero_division=0)
+        # Считаем метрику
+        if metric == 'balanced_accuracy':
+            score = balanced_accuracy_score(y, preds)
         elif metric == 'f1':
             score = f1_score(y, preds, zero_division=0)
-        elif metric == 'accuracy':
-            score = np.mean(preds == y)
         else:
-            raise ValueError(f"Unknown metric {metric}")
-        
+            score = np.mean(preds == y) # обычная accuracy
+            
         if score > best_score:
             best_score = score
             best_threshold = thresh
+            
+    print(f"--- Оптимизация ({metric}) ---")
+    print(f"Лучший порог: {best_threshold:.3f} | Score: {best_score:.4f}")
+    print(f"Доля сигналов MOVE: {np.mean(probs >= best_threshold)*100:.1f}%")
     
-    print(f"Лучший порог: {best_threshold:.2f}")
-    print(f"Сигналов: {(probs >= best_threshold).sum()} ({100*(probs >= best_threshold).mean():.1f}%)")
     return best_threshold, probs, best_score
-
 
 def stage1(
     X_train, X_val, X_test,
     y1_train, y1_val, y1_test,
     cw1,
-    df_test,
     create_model,
-    optimize_threshold,
-    filter_signals=None,
     EPOCHS=100,
     BATCH_SIZE=32,
     PATIENCE_ES=10,
     PATIENCE_LR=5):
 
-    print("\n STAGE 1: MOVE vs HOLD")
+    print("\n STAGE 1: MOVE vs HOLD (Volatility/Activity Filter)")
     print("=" * 50)
 
     input_shape = X_train.shape[1:]
@@ -536,6 +541,7 @@ def stage1(
         monitor='val_loss',
         patience=PATIENCE_ES,
         restore_best_weights=True,
+        min_delta=0.0001,
         verbose=1
     )
 
@@ -547,7 +553,8 @@ def stage1(
         verbose=1
     )
 
-    history1 = model.fit(
+    # 3. ОБУЧЕНИЕ
+    history = model.fit(
         X_train, y1_train,
         validation_data=(X_val, y1_val),
         epochs=EPOCHS,
@@ -561,163 +568,103 @@ def stage1(
     probs_val   = model.predict(X_val, verbose=0).flatten()
     probs_test  = model.predict(X_test, verbose=0).flatten()
 
-    threshold, _, f1 = optimize_threshold(model, X_val, y1_val, metric='precision')
-    print(f"\n Threshold (val): {threshold:.3f}, F1: {f1:.4f}")
-
-    preds_train = (probs_train >= threshold).astype(int)
-    preds_val   = (probs_val   >= threshold).astype(int)
-    preds_test  = (probs_test  >= threshold).astype(int)
-
-    mask_train = (preds_train == 1)
-    mask_val   = (preds_val   == 1)
-    mask_test  = (preds_test  == 1)
-
-    print(f" MOVE filtered (test): {mask_test.sum()} / {len(mask_test)}")
-
-    regime_features = {
-        'regime_score': df_test['Trend_Regime'].values,
-        'vol_regime': (df_test['Vol_20d'] > df_test['Vol_20d'].median()).astype(int).values
-    }
-
-    filtered_preds, _ = filter_signals(
-        preds_test,
-        probs_test,
-        regime_features,
-        PROB_THRESHOLD_BASE=threshold,
+    thresholds = np.linspace(0.3, 0.7, 41)
+    best_thresh = 0.5
+    best_score = -1
+    
+    for t in thresholds:
+        p_val = (probs_val >= t).astype(int)
+        score = balanced_accuracy_score(y1_val, p_val)
+        if score > best_score:
+            best_score = score
+            best_thresh = t
+            
+    best_thresh, _, best_score = optimize_threshold(
+        model, X_val, y1_val, 
+        metric='balanced_accuracy', 
+        min_signal_ratio=0.15 
     )
+    
+    print(f"\n Оптимальный порог Stage 1 (Val): {best_thresh:.3f} с метрикой {best_score:.4f}")
 
-    mask_test = (filtered_preds != 0)
-
-    if mask_test.sum() == 0:
-        print("WARNING: нет сигналов на тесте")
-    if mask_test.sum() == len(mask_test):
-        print("WARNING: сигналы везде на тесте")
+    # Создаем маски
+    mask_train = probs_train >= best_thresh
+    mask_val   = probs_val   >= best_thresh
+    mask_test  = probs_test  >= best_thresh  
 
     return {
-        "mask_train": mask_train,
-        "mask_val": mask_val,
-        "mask_test": mask_test,
+        "model": model,
         "probs_train": probs_train,
         "probs_val": probs_val,
         "probs_test": probs_test,
-        "preds_train": preds_train,
-        "preds_val": preds_val,
-        "preds_test": preds_test,
-        "filtered_preds_test": filtered_preds,
-        "threshold": threshold,
-        "model": model,
-        "f1_val": f1,
-        "n_signals_test": int(mask_test.sum()),
-        "history": history1
+        "mask_train": mask_train,
+        "mask_val": mask_val,
+        "mask_test": mask_test,
+        "threshold": best_thresh,
+        "f1_val": best_score,
+        "history": history
     }
 def stage2(
     X_train, X_val, X_test,
     y2_train, y2_val, y2_test,
     mask1_train, mask1_val, mask1_test,
     create_model,
-    optimize_threshold,
     EPOCHS=50,
     BATCH_SIZE=32,
-    PATIENCE_ES=5,
-    PATIENCE_LR=5,
-    PROB_THRESHOLD_HIGH=0.75,
-    PROB_THRESHOLD_LOW=0.5
+    PATIENCE_ES=5
     ):
 
-    print("\n STAGE 2: UP vs DOWN")
+    print("\n STAGE 2: UP vs DOWN (Directional Model)")
     print("=" * 50)
-    print(f"Stage1 signals → train: {mask1_train.sum()}, val: {mask1_val.sum()}, test: {mask1_test.sum()}")
 
     X_train_s2, y_train_s2 = X_train[mask1_train], y2_train[mask1_train]
-    X_val_s2, y_val_s2 = X_val[mask1_val], y2_val[mask1_val]
-    X_test_s2, y_test_s2 = X_test[mask1_test], y2_test[mask1_test]
-
+    X_val_s2, y_val_s2     = X_val[mask1_val], y2_val[mask1_val]
     train_mask = ~np.isnan(y_train_s2)
-    val_mask   = ~np.isnan(y_val_s2)
-    test_mask  = ~np.isnan(y_test_s2)
-
     X_train_clean, y_train_clean = X_train_s2[train_mask], y_train_s2[train_mask].astype(int)
-    X_val_clean, y_val_clean     = X_val_s2[val_mask], y_val_s2[val_mask].astype(int)
-    X_test_clean, y_test_clean   = X_test_s2[test_mask], y_test_s2[test_mask].astype(int)
-
-    if len(X_train_clean) == 0:
-        print("❌ Stage2: нет train данных")
-        return empty_stage2()
-    if len(X_val_clean) == 0:
-        print("❌ Stage2: нет val данных")
-        return empty_stage2()
-    if len(np.unique(y_train_clean)) < 2:
-        print(f"❌ Stage2: один класс {np.unique(y_train_clean)}")
-        return empty_stage2()
+    down_indices = np.where(y_train_clean == 0)[0]
+    up_indices = np.where(y_train_clean == 1)[0]
+    n_samples = min(len(down_indices), len(up_indices))
     
-    classes = np.unique(y_train_clean)
-    weights = compute_class_weight('balanced', classes=classes, y=y_train_clean)
-    cw2 = dict(zip(classes, weights))
-    print(f"Class weights: {cw2}")
+    balanced_indices = np.concatenate([
+        np.random.choice(down_indices, n_samples, replace=False),
+        np.random.choice(up_indices, n_samples, replace=False)
+    ])
+    
+    np.random.shuffle(balanced_indices)
+    X_train_clean = X_train_clean[balanced_indices]
+    y_train_clean = y_train_clean[balanced_indices]
+    X_val_clean, y_val_clean = X_val_s2[~np.isnan(y_val_s2)], y_val_s2[~np.isnan(y_val_s2)].astype(int)
 
-    model = create_model((X_train_clean.shape[1], X_train_clean.shape[2]))
-    callbacks = [
-        EarlyStopping(monitor='val_loss', patience=PATIENCE_ES, restore_best_weights=True, verbose=0),
-        ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=PATIENCE_LR, verbose=0)
-    ]
-
+    print(f"Обучение на {len(X_train_clean)} сбалансированных примерах (50/50)")
+    model = create_model(X_train_clean.shape[1:], name='stage2_direction')
+    
     history = model.fit(
         X_train_clean, y_train_clean,
         validation_data=(X_val_clean, y_val_clean),
         epochs=EPOCHS,
         batch_size=BATCH_SIZE,
-        class_weight=cw2,
-        callbacks=callbacks,
+        callbacks=[EarlyStopping(monitor='val_loss', patience=PATIENCE_ES, restore_best_weights=True)],
         verbose=1
     )
 
-    threshold, _, f1_val = optimize_threshold(model, X_val_clean, y_val_clean, metric='f1')
-    if len(X_test_clean) == 0:
-        print("⚠️ Stage2: нет test данных")
-        return empty_stage2()
-    
-    probs_test = model.predict(X_test_clean, verbose=0).flatten()
-    preds_test = np.zeros(len(probs_test))
-    # Попробуй так для теста:
-    threshold_high = threshold if threshold > 0.5 else 0.51
-    threshold_low = 1 - threshold_high  
+    best_thresh, _, f1_val = optimize_threshold(
+        model, X_val_clean, y_val_clean, 
+        metric='f1'
+    )
 
-    # preds_test[probs_test >= PROB_THRESHOLD_HIGH] = 1  # LONG
-    # preds_test[probs_test <= PROB_THRESHOLD_LOW] = -1  # SHORT
-    preds_test[probs_test >= threshold_high] = 1  # LONG
-    preds_test[probs_test <= threshold_low] = -1   # SHORT
-
-    indices_test = np.flatnonzero(mask1_test)
-    indices_test = indices_test[~np.isnan(y_test_s2)]    
-    assert len(preds_test) == len(y_test_clean) == len(indices_test)
-
-    print(f"📊 Test samples: {len(preds_test)}")
-    print(f"UP (Long): {(preds_test == 1).sum()} | DOWN (Short): {(preds_test == -1).sum()} | Wait: {(preds_test == 0).sum()}")
+    probs_full = model.predict(X_test, verbose=0).flatten()
+    probs_test_filtered = model.predict(X_test[mask1_test], verbose=0).flatten()
 
     return {
-        "preds": preds_test,
-        "probs": probs_test,
-        "y_true": y_test_clean,
-        "indices": indices_test,
-        "threshold": threshold,
         "model": model,
+        "probs_full": probs_full,
+        "probs_filtered": probs_test_filtered,
+        "threshold": best_thresh, 
         "f1_val": f1_val,
         "history": history
     }
-def empty_stage2():
-
-    return {
-        "preds": np.array([]),
-        "probs": np.array([]),
-        "y_true": np.array([]),
-        "indices": np.array([]),
-        "threshold": 0.3,
-        "model": None,
-        "f1_val": 0,
-        "history": None
-    }
-
 def print_stage_report(y_true, y_pred, title, target_names):
+
     print(f"\n{title}:")
     
     if len(y_true) > 0:
@@ -730,3 +677,249 @@ def print_stage_report(y_true, y_pred, title, target_names):
         ))
     else:
         print(f"{title}: нет данных для оценки")
+
+
+
+# def stage1(
+#     X_train, X_val, X_test,
+#     y1_train, y1_val, y1_test,
+#     cw1,
+#     df_test,
+#     create_model,
+#     optimize_threshold,
+#     filter_signals=None,
+#     EPOCHS=100,
+#     BATCH_SIZE=32,
+#     PATIENCE_ES=10,
+#     PATIENCE_LR=5):
+
+#     print("\n STAGE 1: MOVE vs HOLD")
+#     print("=" * 50)
+
+#     input_shape = X_train.shape[1:]
+#     model = create_model(input_shape, name='stage1_move')
+
+#     early_stop = EarlyStopping(
+#         monitor='val_loss',
+#         patience=PATIENCE_ES,
+#         restore_best_weights=True,
+#         verbose=1
+#     )
+
+#     reduce_lr = ReduceLROnPlateau(
+#         monitor='val_loss',
+#         factor=0.5,
+#         patience=PATIENCE_LR,
+#         min_lr=1e-6,
+#         verbose=1
+#     )
+
+#     history1 = model.fit(
+#         X_train, y1_train,
+#         validation_data=(X_val, y1_val),
+#         epochs=EPOCHS,
+#         batch_size=BATCH_SIZE,
+#         class_weight=cw1,
+#         callbacks=[early_stop, reduce_lr],
+#         verbose=1
+#     )
+
+#     probs_train = model.predict(X_train, verbose=0).flatten()
+#     probs_val   = model.predict(X_val, verbose=0).flatten()
+#     probs_test  = model.predict(X_test, verbose=0).flatten()
+
+#     threshold, _, f1 = optimize_threshold(model, X_val, y1_val, metric='balanced_accuracy')
+#     print(f"\n Threshold (val): {threshold:.3f}, F1: {f1:.4f}")
+
+#     preds_train = (probs_train >= threshold).astype(int)
+#     preds_val   = (probs_val   >= threshold).astype(int)
+#     preds_test  = (probs_test  >= threshold).astype(int)
+
+#     mask_train = (preds_train == 1)
+#     mask_val   = (preds_val   == 1)
+#     mask_test  = (preds_test  == 1)
+
+#     print(f" MOVE filtered (test): {mask_test.sum()} / {len(mask_test)}")
+
+#     regime_features = {
+#         'regime_score': df_test['Trend_Regime'].values,
+#         'vol_regime': (df_test['Vol_20d'] > df_test['Vol_20d'].median()).astype(int).values
+#     }
+
+#     filtered_preds, _ = filter_signals(
+#         preds_test,
+#         probs_test,
+#         regime_features,
+#         PROB_THRESHOLD_BASE=threshold,
+#     )
+
+#     mask_test = (filtered_preds != 0)
+
+#     if mask_test.sum() == 0:
+#         print("WARNING: нет сигналов на тесте")
+#     if mask_test.sum() == len(mask_test):
+#         print("WARNING: сигналы везде на тесте")
+
+#     return {
+#         "mask_train": mask_train,
+#         "mask_val": mask_val,
+#         "mask_test": mask_test,
+#         "probs_train": probs_train,
+#         "probs_val": probs_val,
+#         "probs_test": probs_test,
+#         "preds_train": preds_train,
+#         "preds_val": preds_val,
+#         "preds_test": preds_test,
+#         "filtered_preds_test": filtered_preds,
+#         "threshold": threshold,
+#         "model": model,
+#         "f1_val": f1,
+#         "n_signals_test": int(mask_test.sum()),
+#         "history": history1
+#     }
+
+
+
+# def stage2(
+#     X_train, X_val, X_test,
+#     y2_train, y2_val, y2_test,
+#     mask1_train, mask1_val, mask1_test,
+#     create_model,
+#     optimize_threshold,
+#     EPOCHS=50,
+#     BATCH_SIZE=32,
+#     PATIENCE_ES=5,
+#     PATIENCE_LR=5,
+#     PROB_THRESHOLD_HIGH=0.75,
+#     PROB_THRESHOLD_LOW=0.5
+#     ):
+
+#     print("\n STAGE 2: UP vs DOWN")
+#     print("=" * 50)
+#     print(f"Stage1 signals → train: {mask1_train.sum()}, val: {mask1_val.sum()}, test: {mask1_test.sum()}")
+
+#     X_train_s2, y_train_s2 = X_train[mask1_train], y2_train[mask1_train]
+#     X_val_s2, y_val_s2 = X_val[mask1_val], y2_val[mask1_val]
+#     X_test_s2, y_test_s2 = X_test[mask1_test], y2_test[mask1_test]
+
+#     train_mask = ~np.isnan(y_train_s2)
+#     val_mask   = ~np.isnan(y_val_s2)
+#     test_mask  = ~np.isnan(y_test_s2)
+
+#     X_train_clean, y_train_clean = X_train_s2[train_mask], y_train_s2[train_mask].astype(int)
+#     X_val_clean, y_val_clean     = X_val_s2[val_mask], y_val_s2[val_mask].astype(int)
+#     X_test_clean, y_test_clean   = X_test_s2[test_mask], y_test_s2[test_mask].astype(int)
+
+#     if len(X_train_clean) == 0:
+#         print("❌ Stage2: нет train данных")
+#         return empty_stage2()
+#     if len(X_val_clean) == 0:
+#         print("❌ Stage2: нет val данных")
+#         return empty_stage2()
+#     if len(np.unique(y_train_clean)) < 2:
+#         print(f"❌ Stage2: один класс {np.unique(y_train_clean)}")
+#         return empty_stage2()
+    
+#     classes = np.unique(y_train_clean)
+#     weights = compute_class_weight('balanced', classes=classes, y=y_train_clean)
+#     cw2 = dict(zip(classes, weights))
+#     print(f"Class weights: {cw2}")
+
+#     model = create_model((X_train_clean.shape[1], X_train_clean.shape[2]))
+#     callbacks = [
+#         EarlyStopping(monitor='val_loss', patience=PATIENCE_ES, restore_best_weights=True, verbose=0),
+#         ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=PATIENCE_LR, verbose=0)
+#     ]
+
+#     history = model.fit(
+#         X_train_clean, y_train_clean,
+#         validation_data=(X_val_clean, y_val_clean),
+#         epochs=EPOCHS,
+#         batch_size=BATCH_SIZE,
+#         class_weight=cw2,
+#         callbacks=callbacks,
+#         verbose=1
+#     )
+
+#     threshold, _, f1_val = optimize_threshold(model, X_val_clean, y_val_clean, metric='f1')
+#     if len(X_test_clean) == 0:
+#         print("⚠️ Stage2: нет test данных")
+#         return empty_stage2()
+    
+#     probs_test = model.predict(X_test_clean, verbose=0).flatten()
+#     preds_test = np.zeros(len(probs_test))
+#     # Попробуй так для теста:
+#     threshold_high = threshold if threshold > 0.5 else 0.51
+#     threshold_low = 1 - threshold_high  
+
+#     # preds_test[probs_test >= PROB_THRESHOLD_HIGH] = 1  # LONG
+#     # preds_test[probs_test <= PROB_THRESHOLD_LOW] = -1  # SHORT
+#     preds_test[probs_test >= threshold_high] = 1  # LONG
+#     preds_test[probs_test <= threshold_low] = -1   # SHORT
+
+#     indices_test = np.flatnonzero(mask1_test)
+#     indices_test = indices_test[~np.isnan(y_test_s2)]    
+#     assert len(preds_test) == len(y_test_clean) == len(indices_test)
+
+#     print(f"📊 Test samples: {len(preds_test)}")
+#     print(f"UP (Long): {(preds_test == 1).sum()} | DOWN (Short): {(preds_test == -1).sum()} | Wait: {(preds_test == 0).sum()}")
+
+#     return {
+#         "preds": preds_test,
+#         "probs": probs_test,
+#         "y_true": y_test_clean,
+#         "indices": indices_test,
+#         "threshold": threshold,
+#         "model": model,
+#         "f1_val": f1_val,
+#         "history": history
+#     }
+# def empty_stage2():
+
+#     return {
+#         "preds": np.array([]),
+#         "probs": np.array([]),
+#         "y_true": np.array([]),
+#         "indices": np.array([]),
+#         "threshold": 0.3,
+#         "model": None,
+#         "f1_val": 0,
+#         "history": None
+#     }
+
+
+
+# def optimize_threshold(model, X, y, metric='balanced_accuracy', low=0.45, high=0.75, step=0.01, min_signal_ratio=0.02):
+#     print(f"\n🔍 Оптимизация порога (metric='{metric}', min_signals={min_signal_ratio*100:.0f}%)...")
+#     probs = model.predict(X, verbose=0).flatten()
+#     n_samples = len(y)
+    
+#     thresholds = np.arange(low, high + step, step)
+#     best_threshold = 0.5
+#     best_score = -np.inf
+    
+#     for thresh in thresholds:
+#         preds = (probs >= thresh).astype(int)
+#         signal_ratio = preds.sum() / n_samples
+        
+#         if signal_ratio < min_signal_ratio:
+#             continue
+            
+#         if metric == 'precision':
+#             score = precision_score(y, preds, zero_division=0)
+#         elif metric == 'f1':
+#             score = f1_score(y, preds, zero_division=0)
+#         elif metric == 'accuracy':
+#             score = np.mean(preds == y)
+#         elif metric == 'balanced_accuracy':
+#             score = balanced_accuracy_score(y, preds)
+#         else:
+#             raise ValueError(f"Unknown metric {metric}")
+        
+#         if score > best_score:
+#             best_score = score
+#             best_threshold = thresh
+    
+#     print(f"Лучший порог: {best_threshold:.2f}")
+#     print(f"Сигналов: {(probs >= best_threshold).sum()} ({100*(probs >= best_threshold).mean():.1f}%)")
+#     return best_threshold, probs, best_score

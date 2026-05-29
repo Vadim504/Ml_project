@@ -296,6 +296,26 @@
             alert(message); // Если дива нет, просто выведет в окно
         }
     }
+    function updateRecommendedUI(bestModelKey) {
+    const models = ['gru', 'lstm', 'cnn'];
+
+    models.forEach(m => {
+        const btn = document.getElementById(`btn_${m}`);
+        const recSpan = document.getElementById(`rec_${m}`);
+        
+        if (m === bestModelKey) {
+            // Делаем модель визуально "Рекомендованной"
+            btn.classList.add('active-model', 'border-blue-500');
+            btn.classList.remove('border-transparent', 'bg-gray-50');
+            recSpan.innerText = '(Рекомендуемо)';
+        } else {
+            // Сбрасываем остальные модели
+            btn.classList.remove('active-model', 'border-blue-500');
+            btn.classList.add('border-transparent', 'bg-gray-50');
+            recSpan.innerText = '';
+        }
+    });
+}
 </script>
 
 <style>

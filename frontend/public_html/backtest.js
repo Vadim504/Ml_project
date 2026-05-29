@@ -504,6 +504,19 @@ function debugBacktest() {
     });
 }
 
+const determineBestModel = (results) => {
+    let bestModel = 'gru'; // по умолчанию
+    let maxSharpe = -Infinity;
+
+    for (const [modelName, stats] of Object.entries(results)) {
+        if (stats.sharpe > maxSharpe) {
+            maxSharpe = stats.sharpe;
+            bestModel = modelName;
+        }
+    }
+    return bestModel;
+};
+
 // Экспорт функций для использования из консоли
 window.runBacktest = runBacktest;
 window.clearBacktestResults = clearBacktestResults;

@@ -1,15 +1,15 @@
 {
     "strategy_name": "two_stage",
     "params": {
-        "threshold_stage1": 0.6200000000000001,
-        "threshold_stage2": 0.56,
-        "move_threshold": 0.015,
-        "horizon": 10,
+        "threshold_stage1": 0.3,
+        "threshold_stage2": 0.5,
+        "move_threshold": 0.01,
+        "horizon": 3,
         "commission": 0.001,
         "slippage": 0.0005,
         "max_position_size": 0.1,
         "max_drawdown": 0.15,
-        "sequence_length": 60
+        "sequence_length": 15
     },
     "features": [
         "Return",
@@ -39,30 +39,78 @@
         "SMA_50"
     ],
     "stage1": {
-        "threshold": 0.6200000000000001,
-        "f1_val": 1.0,
-        "n_signals": 2,
+        "threshold": 0.3,
+        "f1_val": 0.5482737252124645,
+        "n_signals": null,
         "class_balance": null
     },
     "stage2": {
-        "threshold": 0.56,
-        "f1_val": 0.8387096774193549,
-        "n_signals": 2,
+        "threshold": 0.3,
+        "f1_val": 0.48322147651006714,
+        "n_signals": 0,
         "class_balance": null
     },
     "backtest": {
-        "total_return": 9.65948913389525e-06,
-        "sharpe_ratio": 0.006178561896066899,
-        "max_drawdown": 0.0011878082913456555,
-        "win_rate": 1.0,
+        "total_return": 0.003443286389287481,
+        "sharpe_ratio": 0.5738977890568184,
+        "max_drawdown": 0.003718573527253466,
+        "win_rate": 0.7777777777777778,
         "trades": [
             {
-                "pnl": 0.004859034913073708,
+                "pnl": -0.00341437719850475,
                 "type": "EXIT",
-                "hold": 4,
-                "direction": 1
+                "hold": 3,
+                "direction": 1.0
+            },
+            {
+                "pnl": 0.003786427129437709,
+                "type": "EXIT",
+                "hold": 2,
+                "direction": 1.0
+            },
+            {
+                "pnl": -0.0019758154597990926,
+                "type": "EXIT",
+                "hold": 3,
+                "direction": -1.0
+            },
+            {
+                "pnl": 0.002090702348336094,
+                "type": "EXIT",
+                "hold": 3,
+                "direction": -1.0
+            },
+            {
+                "pnl": 0.0005446018558718469,
+                "type": "EXIT",
+                "hold": 3,
+                "direction": -1.0
+            },
+            {
+                "pnl": 0.0003386244798183793,
+                "type": "EXIT",
+                "hold": 3,
+                "direction": -1.0
+            },
+            {
+                "pnl": 0.002344028190326441,
+                "type": "EXIT",
+                "hold": 2,
+                "direction": 1.0
+            },
+            {
+                "pnl": 0.0015242014977847006,
+                "type": "EXIT",
+                "hold": 3,
+                "direction": 1.0
+            },
+            {
+                "pnl": 0.006812827778539332,
+                "type": "EXIT",
+                "hold": 3,
+                "direction": -1.0
             }
         ],
-        "avg_pnl": 0.004859034913073708
+        "avg_pnl": 0.001339024513534518
     }
 }
